@@ -1,5 +1,8 @@
 # NIDS-Lab
 
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A small lab for classical machine learning on network intrusion detection. Same public data, same metrics, a few standard detectors. The point is to show the numbers clearly, including where a method is weak.
 
 This is a defensive, educational project. It does not generate attacks. It only scores traffic that is already in a public dataset.
@@ -21,6 +24,30 @@ python -m nidslab run-all --dataset all
 `download --dataset cicids2017` pulls the public MachineLearningCSV zip (about 224 MB) and extracts the eight day files under `data/cicids2017/`. The raw files stay local. They are not part of the git repo.
 
 `run-all --dataset all` writes `results/run_all.md` and `results/run_all.csv`. One dataset at a time is `run-all --dataset nslkdd` or `run-all --dataset cicids2017`.
+
+## Architecture
+
+```
+public CSV
+    |
+    v
+loader
+    NSL-KDD: official KDDTrain+ and KDDTest+
+    CICIDS2017: stream all 8 files, reservoir sample, then 80/20 split
+    |
+    v
+encoder
+    one-class models: fit on normal training rows only
+    Random Forest: fit on every training row
+    |
+    v
+detector
+    iforest, ocsvm, plain autoencoder -> anomaly score
+    random forest -> attack probability
+    |
+    v
+precision, recall, F1, ROC-AUC, confusion matrix, ROC figure
+```
 
 ## How a run is set up
 
@@ -84,6 +111,16 @@ src/nidslab/eval/metrics.py      precision, recall, F1, ROC-AUC
 src/nidslab/eval/plots.py        ROC and confusion figures
 src/nidslab/cli.py               download, run, run-all
 ```
+
+## Limitations
+
+- NSL-KDD is cleaned 1998/1999 traffic. A good score does not transfer to a current network.
+- CICIDS2017 here is a balanced 20,000 / 20,000 sample, then a random 80/20 split of the same days. The raw files are mostly BENIGN, and there is no official train/test split. The Random Forest score near 1.0 is from that setup.
+- One-Class SVM sees 4,000 normal training rows because an RBF kernel cannot hold the full normal set.
+- Precision, recall, and F1 use a fixed threshold. ROC-AUC does not. A high AUC with a low recall means the ranking is useful and the chosen cut is strict.
+- Attack types are collapsed into one positive class. The lab does not score each attack family on its own.
+- The autoencoder is a plain dense network trained with mean squared error. It is not a VAE, and this repo does not measure model size or detection latency.
+- Tests use tiny tables. They check the code, not the published metrics. The metrics above come from the real files.
 
 ## Tests
 
