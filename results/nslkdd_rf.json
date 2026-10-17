@@ -1,0 +1,32 @@
+{
+  "dataset": "nslkdd",
+  "model": "rf",
+  "seed": 42,
+  "protocol": "Supervised reference. Random Forest (100 trees) is fit on all KDDTrain+ rows with the attack label. A score of 0.5 is the decision threshold. This is not comparable one-to-one with the one-class models.",
+  "counts": {
+    "train_rows": 125973,
+    "train_normal": 67343,
+    "train_attack": 58630,
+    "fit_on": "all",
+    "fit_rows": 125973,
+    "test_rows": 22544,
+    "test_normal": 9711,
+    "test_attack": 12833,
+    "n_features_after_encoding": 122,
+    "sampled": false
+  },
+  "settings": {
+    "n_estimators": 100,
+    "threshold": 0.5
+  },
+  "metrics": {
+    "precision": 0.9689922480620154,
+    "recall": 0.6331333281383932,
+    "f1": 0.7658591761711754,
+    "roc_auc": 0.9597589738759107,
+    "tn": 9451,
+    "fp": 260,
+    "fn": 4708,
+    "tp": 8125
+  }
+}

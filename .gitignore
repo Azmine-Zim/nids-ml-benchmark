@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.idea/
+
+# Local dataset download. Public files, but large, and not needed in git.
+data/*
+!data/.gitkeep
+
+# Private handover notes and local secrets. Never publish these.
+Brief_*.docx
+*.docx
+.env
+.env.*
+*.pem
+*.key
+credentials*
+secrets*
