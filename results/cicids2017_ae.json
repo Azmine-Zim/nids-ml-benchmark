@@ -1,0 +1,59 @@
+{
+  "dataset": "cicids2017",
+  "model": "ae",
+  "seed": 42,
+  "protocol": "Not the full CICIDS2017 table. Every MachineLearningCSV file is streamed. A reservoir sample keeps at most 20000 BENIGN rows and 20000 attack rows (seed 42). Infinite or missing values are dropped before sampling. The sample is split 80/20 into train and test, stratified on the attack bit. CICIDS2017 has no official train/test files, so this split is defined here. Destination Port stays in the features as a number. One-class. A plain dense autoencoder (64-32-16-32-64, MSE loss, no KL term) is fit on 90% of the BENIGN rows in the CICIDS train sample for 15 epochs. The anomaly score is mean squared reconstruction error. The threshold is the 99th percentile of that error on the held-out 10% of BENIGN rows.",
+  "counts": {
+    "train_rows": 32000,
+    "train_normal": 16000,
+    "train_attack": 16000,
+    "fit_on": "normal",
+    "fit_rows": 16000,
+    "test_rows": 8000,
+    "test_normal": 4000,
+    "test_attack": 4000,
+    "n_features_after_encoding": 78,
+    "sampled": true,
+    "split_train_label": "train sample (80%)",
+    "split_test_label": "test sample (20%)",
+    "sample_note": "Not the full CICIDS2017 table. Every MachineLearningCSV file is streamed. A reservoir sample keeps at most 20000 BENIGN rows and 20000 attack rows (seed 42). Infinite or missing values are dropped before sampling. The sample is split 80/20 into train and test, stratified on the attack bit. CICIDS2017 has no official train/test files, so this split is defined here. Destination Port stays in the features as a number.",
+    "source": "CICIDS2017 MachineLearningCSV",
+    "citation": "Sharafaldin, I., Habibi Lashkari, A., and Ghorbani, A. A. (2018). Toward Generating a New Intrusion Detection Dataset and Intrusion Traffic Characterization. ICISSP.",
+    "files": [
+      "Monday-WorkingHours.pcap_ISCX.csv",
+      "Tuesday-WorkingHours.pcap_ISCX.csv",
+      "Wednesday-workingHours.pcap_ISCX.csv",
+      "Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv",
+      "Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv",
+      "Friday-WorkingHours-Morning.pcap_ISCX.csv",
+      "Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv",
+      "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv"
+    ],
+    "rows_seen_benign": 2271320,
+    "rows_seen_attack": 556556,
+    "rows_dropped_nonfinite": 2867,
+    "benign_cap": 20000,
+    "attack_cap": 20000,
+    "sample_benign": 20000,
+    "sample_attack": 20000
+  },
+  "settings": {
+    "epochs": 15,
+    "batch_size": 512,
+    "learning_rate": 0.001,
+    "final_train_mse": 0.17761367784606086,
+    "threshold": 1.7441531217098218,
+    "threshold_quantile": 0.99,
+    "architecture": "64-32-16-32-64"
+  },
+  "metrics": {
+    "precision": 0.9692637598284489,
+    "recall": 0.339,
+    "f1": 0.5023152435636229,
+    "roc_auc": 0.8337745,
+    "tn": 3957,
+    "fp": 43,
+    "fn": 2644,
+    "tp": 1356
+  }
+}

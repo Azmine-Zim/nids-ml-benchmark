@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from nidslab.data.cicids import load_cicids_splits, prepare_cicids
 from nidslab.data.nslkdd import (
     TEST_NAME,
     TRAIN_NAME,
@@ -68,11 +69,21 @@ def run_iforest_on_frames(
     })
 
 
-def run_model_on_frames(model: str, train: pd.DataFrame, test: pd.DataFrame, seed: int = 42) -> tuple[dict, np.ndarray, np.ndarray]:
+def run_model_on_frames(
+    model: str,
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    seed: int = 42,
+    prepare=None,
+    dataset: str = "nslkdd",
+    protocol: str | None = None,
+) -> tuple[dict, np.ndarray, np.ndarray]:
     if model not in MODEL_NAMES:
         raise ValueError(f"unknown model {model}")
     fit_on = "all" if model == "rf" else "normal"
-    x_train, y_fit, x_test, y_test, summary = preprocess(train, test, fit_on=fit_on)
+    if prepare is None:
+        prepare = preprocess
+    x_train, y_fit, x_test, y_test, summary = prepare(train, test, fit_on=fit_on)
     extra: dict = {}
     if model == "iforest":
         detector = IsolationForestDetector(seed=seed)
@@ -81,8 +92,10 @@ def run_model_on_frames(model: str, train: pd.DataFrame, test: pd.DataFrame, see
     elif model == "ocsvm":
         detector = OneClassSVMDetector(seed=seed)
         detector.fit(x_train)
-        summary["sampled"] = detector.used_rows < summary["fit_rows"]
-        summary["sample_rows"] = detector.used_rows
+        summary["ocsvm_rows"] = detector.used_rows
+        if not summary.get("sampled"):
+            summary["sampled"] = detector.used_rows < summary["fit_rows"]
+            summary["sample_rows"] = detector.used_rows
         extra = {"nu": detector.nu, "kernel": "rbf", "max_train_rows": detector.max_train_rows}
     elif model == "rf":
         detector = RandomForestDetector(seed=seed)
@@ -103,7 +116,7 @@ def run_model_on_frames(model: str, train: pd.DataFrame, test: pd.DataFrame, see
     scores = np.asarray(detector.anomaly_scores(x_test), dtype=float)
     predictions = np.asarray(detector.predict(x_test), dtype=int)
     metrics = evaluate_binary(y_test, predictions, scores)
-    record = _record(model, seed, summary, metrics, extra)
+    record = _record(model, seed, summary, metrics, extra, dataset=dataset, protocol=protocol)
     return record, y_test, scores
 
 
@@ -158,7 +171,7 @@ def run_nslkdd_all(
     table_md = Path(out_dir) / "nslkdd_results.md"
     table_csv = Path(out_dir) / "nslkdd_results.csv"
     table_md.write_text(_table_markdown(records, overlay), encoding="utf-8")
-    table_csv.write_text(_table_csv(records), encoding="utf-8")
+    table_csv.write_text(_table_csv(records, dataset="nslkdd"), encoding="utf-8")
     for record in records:
         record["outputs"]["table_md"] = str(table_md)
         record["outputs"]["table_csv"] = str(table_csv)
@@ -177,12 +190,20 @@ def _load(data_dir, download, train, test):
     return read_nslkdd_file(train_path), read_nslkdd_file(test_path)
 
 
-def _record(model: str, seed: int, summary: dict, metrics: dict, extra: dict) -> dict:
+def _record(
+    model: str,
+    seed: int,
+    summary: dict,
+    metrics: dict,
+    extra: dict,
+    dataset: str = "nslkdd",
+    protocol: str | None = None,
+) -> dict:
     return {
-        "dataset": "nslkdd",
+        "dataset": dataset,
         "model": model,
         "seed": seed,
-        "protocol": PROTOCOLS[model],
+        "protocol": protocol or PROTOCOLS[model],
         "counts": summary,
         "settings": extra,
         "metrics": metrics,
@@ -192,20 +213,21 @@ def _record(model: str, seed: int, summary: dict, metrics: dict, extra: dict) ->
 def _markdown(record: dict) -> str:
     metrics = record["metrics"]
     counts = record["counts"]
+    title = "NSL-KDD" if record["dataset"] == "nslkdd" else "CICIDS2017"
     lines = [
-        f"# NSL-KDD, {record['model']}",
+        f"# {title}, {record['model']}",
         "",
         record["protocol"],
         "",
         "| split | rows | normal | attack |",
         "| --- | ---: | ---: | ---: |",
         (
-            f"| KDDTrain+ | {counts['train_rows']} | {counts['train_normal']} | "
-            f"{counts['train_attack']} |"
+            f"| {counts.get('split_train_label', 'KDDTrain+')} | {counts['train_rows']} | "
+            f"{counts['train_normal']} | {counts['train_attack']} |"
         ),
         (
-            f"| KDDTest+ | {counts['test_rows']} | {counts['test_normal']} | "
-            f"{counts['test_attack']} |"
+            f"| {counts.get('split_test_label', 'KDDTest+')} | {counts['test_rows']} | "
+            f"{counts['test_normal']} | {counts['test_attack']} |"
         ),
         "",
         (
@@ -214,10 +236,16 @@ def _markdown(record: dict) -> str:
         ),
         "",
     ]
-    if counts.get("sampled"):
+    if counts.get("sample_note"):
+        lines.append(counts["sample_note"])
+        lines.append("")
+    elif counts.get("sampled"):
         lines.append(
             f"Training sample: {counts.get('sample_rows')} rows. The test file is full."
         )
+        lines.append("")
+    if counts.get("ocsvm_rows"):
+        lines.append(f"One-Class SVM was fit on {counts['ocsvm_rows']} normal training rows.")
         lines.append("")
     lines.extend(
         [
@@ -266,12 +294,187 @@ def _table_markdown(records: list[dict], overlay: Path) -> str:
     return "\n".join(lines)
 
 
-def _table_csv(records: list[dict]) -> str:
-    lines = ["model,precision,recall,f1,roc_auc,tn,fp,fn,tp"]
+CICIDS_PROTOCOLS = {
+    "iforest": (
+        "One-class. Isolation Forest is fit only on BENIGN rows in the CICIDS train sample. "
+        "Threshold is sklearn's contamination offset (contamination=0.01, 100 trees)."
+    ),
+    "ocsvm": (
+        "One-class. One-Class SVM (RBF, nu=0.01) is fit on at most 4000 BENIGN rows "
+        "from the CICIDS train sample. The test sample is not reduced again."
+    ),
+    "rf": (
+        "Supervised reference. Random Forest (100 trees) is fit on the full CICIDS train sample "
+        "with the attack label. A score of 0.5 is the decision threshold. "
+        "This is not comparable one-to-one with the one-class models."
+    ),
+    "ae": (
+        "One-class. A plain dense autoencoder (64-32-16-32-64, MSE loss, no KL term) "
+        "is fit on 90% of the BENIGN rows in the CICIDS train sample for 15 epochs. "
+        "The anomaly score is mean squared reconstruction error. "
+        "The threshold is the 99th percentile of that error on the held-out 10% of BENIGN rows."
+    ),
+}
+
+
+def run_cicids_model(
+    model: str,
+    data_dir: Path,
+    out_dir: Path,
+    seed: int = 42,
+    download: bool = True,
+    train: pd.DataFrame | None = None,
+    test: pd.DataFrame | None = None,
+    load_summary: dict | None = None,
+) -> dict:
+    if train is None or test is None:
+        train, test, load_summary = load_cicids_splits(data_dir, seed=seed, download=download)
+    record, y_test, scores = run_model_on_frames(
+        model,
+        train,
+        test,
+        seed=seed,
+        prepare=prepare_cicids,
+        dataset="cicids2017",
+        protocol=CICIDS_PROTOCOLS[model],
+    )
+    if load_summary:
+        record["counts"].update(load_summary)
+        record["protocol"] = load_summary["sample_note"] + " " + CICIDS_PROTOCOLS[model]
+    return _write_model_outputs(record, y_test, scores, out_dir, "cicids2017", "CICIDS2017")
+
+
+def run_cicids_all(
+    data_dir: Path,
+    out_dir: Path,
+    seed: int = 42,
+    download: bool = True,
+) -> list[dict]:
+    train, test, load_summary = load_cicids_splits(data_dir, seed=seed, download=download)
+    records = []
+    curves = []
+    for model in MODEL_NAMES:
+        record = run_cicids_model(
+            model,
+            data_dir,
+            out_dir,
+            seed=seed,
+            download=False,
+            train=train,
+            test=test,
+            load_summary=load_summary,
+        )
+        curves.append((model, record.pop("_y_test"), record.pop("_scores")))
+        records.append(record)
+    overlay = Path(out_dir) / "figures" / "cicids2017_roc_all.png"
+    save_roc_overlay(curves, overlay, "CICIDS2017 ROC, four detectors")
+    table_md = Path(out_dir) / "cicids2017_results.md"
+    table_csv = Path(out_dir) / "cicids2017_results.csv"
+    note = load_summary["sample_note"]
+    table_md.write_text(_dataset_table_markdown("CICIDS2017 results", records, overlay, note), encoding="utf-8")
+    table_csv.write_text(_table_csv(records, dataset="cicids2017"), encoding="utf-8")
+    for record in records:
+        record["outputs"]["table_md"] = str(table_md)
+        record["outputs"]["table_csv"] = str(table_csv)
+        record["outputs"]["roc_overlay"] = str(overlay)
+    return records
+
+
+def run_all_datasets(data_dir: Path, out_dir: Path, seed: int = 42, download: bool = True) -> list[dict]:
+    nsl_records = run_nslkdd_all(data_dir, out_dir, seed=seed, download=download)
+    cic_records = run_cicids_all(data_dir, out_dir, seed=seed, download=download)
+    combined = nsl_records + cic_records
+    out_dir = Path(out_dir)
+    table_md = out_dir / "run_all.md"
+    table_csv = out_dir / "run_all.csv"
+    table_md.write_text(_combined_markdown(combined), encoding="utf-8")
+    table_csv.write_text(_table_csv(combined, dataset=None), encoding="utf-8")
+    for record in combined:
+        record["outputs"]["run_all_md"] = str(table_md)
+        record["outputs"]["run_all_csv"] = str(table_csv)
+    return combined
+
+
+def _write_model_outputs(record, y_test, scores, out_dir, slug: str, title: str) -> dict:
+    out_dir = Path(out_dir)
+    model = record["model"]
+    fig_dir = out_dir / "figures"
+    roc_path = fig_dir / f"{slug}_{model}_roc.png"
+    cm_path = fig_dir / f"{slug}_{model}_cm.png"
+    save_roc(y_test, scores, roc_path, f"{title} {model} ROC")
+    metrics = record["metrics"]
+    save_confusion(metrics["tn"], metrics["fp"], metrics["fn"], metrics["tp"], cm_path, f"{title} {model}")
+    json_path = out_dir / f"{slug}_{model}.json"
+    md_path = out_dir / f"{slug}_{model}.md"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    md_path.write_text(_markdown(record), encoding="utf-8")
+    record["outputs"] = {
+        "json": str(json_path),
+        "markdown": str(md_path),
+        "roc": str(roc_path),
+        "confusion": str(cm_path),
+    }
+    record["_y_test"] = y_test
+    record["_scores"] = scores
+    return record
+
+
+def _dataset_table_markdown(title: str, records: list[dict], overlay: Path, note: str) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        note,
+        "",
+        "Random Forest sees training labels. The other three do not.",
+        "One-Class SVM uses at most 4000 normal training rows.",
+        "",
+        "| model | precision | recall | f1 | roc_auc |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
     for record in records:
         metrics = record["metrics"]
         lines.append(
-            "{model},{precision:.6f},{recall:.6f},{f1:.6f},{roc_auc:.6f},{tn},{fp},{fn},{tp}".format(
+            f"| {record['model']} | {metrics['precision']:.4f} | {metrics['recall']:.4f} | "
+            f"{metrics['f1']:.4f} | {metrics['roc_auc']:.4f} |"
+        )
+    lines.extend(["", f"Overlay ROC: `{overlay.as_posix()}`.", ""])
+    return "\n".join(lines)
+
+
+def _combined_markdown(records: list[dict]) -> str:
+    lines = [
+        "# Run-all results",
+        "",
+        "Attack is the positive class. NSL-KDD uses the official KDDTest+ file with no row sampling.",
+        "CICIDS2017 uses a reservoir sample and an 80/20 split defined in this repo. See cicids2017_results.md.",
+        "Random Forest is supervised. The other models are one-class. Do not read a higher Random Forest score as a like-for-like win.",
+        "",
+        "| dataset | model | precision | recall | f1 | roc_auc |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for record in records:
+        metrics = record["metrics"]
+        lines.append(
+            f"| {record['dataset']} | {record['model']} | {metrics['precision']:.4f} | "
+            f"{metrics['recall']:.4f} | {metrics['f1']:.4f} | {metrics['roc_auc']:.4f} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _table_csv(records: list[dict], dataset: str | None = None) -> str:
+    include_dataset = dataset is None
+    header = "dataset,model,precision,recall,f1,roc_auc,tn,fp,fn,tp" if include_dataset else "model,precision,recall,f1,roc_auc,tn,fp,fn,tp"
+    lines = [header]
+    for record in records:
+        metrics = record["metrics"]
+        prefix = f"{record['dataset']}," if include_dataset else ""
+        if dataset is not None:
+            prefix = ""
+        lines.append(
+            prefix
+            + "{model},{precision:.6f},{recall:.6f},{f1:.6f},{roc_auc:.6f},{tn},{fp},{fn},{tp}".format(
                 model=record["model"], **metrics
             )
         )

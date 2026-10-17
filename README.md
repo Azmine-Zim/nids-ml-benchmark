@@ -4,20 +4,23 @@ A small lab for classical machine learning on network intrusion detection. Same 
 
 This is a defensive, educational project. It does not generate attacks. It only scores traffic that is already in a public dataset.
 
-What runs today is NSL-KDD with four detectors: Isolation Forest, One-Class SVM, Random Forest, and a plain dense autoencoder. CICIDS2017 is next. The autoencoder is a normal dense network, not a VAE. This repo does not study model compression or detection latency.
+What runs today is NSL-KDD and CICIDS2017, each with four detectors: Isolation Forest, One-Class SVM, Random Forest, and a plain dense autoencoder. The autoencoder is a normal dense network, not a VAE. This repo does not study model compression or detection latency.
 
 ## Quickstart
 
 ```bash
 python -m pip install -e ".[dev]"
 python -m nidslab download --dataset nslkdd
+python -m nidslab download --dataset cicids2017
 python -m nidslab run --dataset nslkdd --model iforest
-python -m nidslab run-all --dataset nslkdd
+python -m nidslab run-all --dataset all
 ```
 
-`download` pulls the public `KDDTrain+.txt` and `KDDTest+.txt` files into `data/` (about 20 MB). If that mirror is blocked, download those two files from the University of New Brunswick NSL-KDD page and put them in `data/` yourself, then run the same commands.
+`download --dataset nslkdd` pulls `KDDTrain+.txt` and `KDDTest+.txt` into `data/` (about 20 MB). If that mirror is blocked, put those two files in `data/` yourself.
 
-`run` writes `results/nslkdd_<model>.json`, a short markdown note, a ROC curve, and a confusion matrix. `run-all` also writes `results/nslkdd_results.md`, `results/nslkdd_results.csv`, and `results/figures/nslkdd_roc_all.png`.
+`download --dataset cicids2017` pulls the public MachineLearningCSV zip (about 224 MB) and extracts the eight day files under `data/cicids2017/`. The raw files stay local. They are not part of the git repo.
+
+`run-all --dataset all` writes `results/run_all.md` and `results/run_all.csv`. One dataset at a time is `run-all --dataset nslkdd` or `run-all --dataset cicids2017`.
 
 ## How a run is set up
 
@@ -53,10 +56,26 @@ Seed 42. Scored on the full `KDDTest+`. Random Forest uses labels. The other thr
 
 ![ROC curves on NSL-KDD](results/figures/nslkdd_roc_all.png)
 
+## CICIDS2017 results
+
+The eight MachineLearningCSV files were streamed: 2,271,320 BENIGN flows, 556,556 attack flows, and 2,867 rows dropped for missing or infinite values. Training does not use every row. A reservoir sample keeps 20,000 BENIGN and 20,000 attack rows (seed 42), then an 80/20 split. The raw data is not balanced, and CIC published no official train/test split. Train and test here are a random cut of the same days, so Random Forest can look almost perfect. That number is not a fair win over the one-class models, and it is not a claim about a future week of traffic.
+
+Cite the data if you use it: Sharafaldin, Habibi Lashkari, and Ghorbani, ICISSP 2018.
+
+| model | setup | precision | recall | f1 | roc_auc |
+| --- | --- | ---: | ---: | ---: | ---: |
+| iforest | one-class, 16000 BENIGN train rows | 0.9247 | 0.1227 | 0.2167 | 0.7264 |
+| ocsvm | one-class, 4000 BENIGN rows | 0.9215 | 0.4640 | 0.6172 | 0.7786 |
+| rf | supervised, balanced train sample | 0.9987 | 0.9968 | 0.9977 | 0.9999 |
+| ae | one-class, 16000 BENIGN train rows | 0.9693 | 0.3390 | 0.5023 | 0.8338 |
+
+![ROC curves on the CICIDS2017 sample](results/figures/cicids2017_roc_all.png)
+
 ## Layout
 
 ```
-src/nidslab/data/nslkdd.py       loader and preprocessing
+src/nidslab/data/nslkdd.py       NSL-KDD loader
+src/nidslab/data/cicids.py       CICIDS2017 loader and sample
 src/nidslab/models/iforest.py    Isolation Forest
 src/nidslab/models/ocsvm.py      One-Class SVM
 src/nidslab/models/rf.py         Random Forest
